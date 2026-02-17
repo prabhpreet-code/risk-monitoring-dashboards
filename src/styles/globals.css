@@ -1,0 +1,28 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --app-bg: #070b14;
+  --app-bg-soft: #101726;
+  --app-panel: #131d2e;
+  --app-panel-border: #26344a;
+  --app-text: #e6eefb;
+  --app-text-dim: #9db0cc;
+  --app-accent: #35c2ff;
+  --app-success: #29d68a;
+}
+
+html,
+body,
+#__next {
+  min-height: 100%;
+}
+
+body {
+  background:
+    radial-gradient(circle at 15% 10%, rgba(53, 194, 255, 0.16), transparent 35%),
+    radial-gradient(circle at 85% 90%, rgba(41, 214, 138, 0.1), transparent 40%),
+    var(--app-bg);
+  color: var(--app-text);
+}

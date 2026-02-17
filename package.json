@@ -1,0 +1,49 @@
+{
+  "name": "aave-craft-task",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@aave/contract-helpers": "1.30.3",
+    "@aave/math-utils": "1.30.3",
+    "@apollo/client": "^3.11.10",
+    "@bgd-labs/aave-address-book": "^4.3.1",
+    "@rainbow-me/rainbowkit": "^2.2.0",
+    "@tabler/icons-react": "^3.22.0",
+    "@tanstack/react-query": "^5.59.20",
+    "axios": "^1.7.7",
+    "bignumber.js": "^9.1.2",
+    "chart.js": "^4.4.6",
+    "class-variance-authority": "^0.7.0",
+    "clsx": "^2.1.1",
+    "ethers": "5",
+    "framer-motion": "^11.11.13",
+    "graphql": "^16.9.0",
+    "lucide-react": "^0.456.0",
+    "next": "15.0.3",
+    "react": "19.0.0-rc-66855b96-20241106",
+    "react-chartjs-2": "^5.2.0",
+    "react-dom": "19.0.0-rc-66855b96-20241106",
+    "react-icons": "^5.3.0",
+    "react-toastify": "^10.0.6",
+    "reflect-metadata": "^0.2.2",
+    "tailwind-merge": "^2.5.4",
+    "tailwindcss-animate": "^1.0.7",
+    "wagmi": "^2.12.30"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "eslint": "^8",
+    "eslint-config-next": "15.0.3",
+    "postcss": "^8",
+    "tailwindcss": "^3.4.1",
+    "typescript": "^5"
+  }
+}
