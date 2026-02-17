@@ -4,6 +4,7 @@ import LiquidationPanel from "./LiquidationPanel";
 import MetricCard from "./MetricCard";
 import RangeSelector from "./RangeSelector";
 import RiskBucketsTable from "./RiskBucketsTable";
+import OracleRiskPanel from "./OracleRiskPanel";
 import RiskScorecards from "./RiskScorecards";
 import { useVaultDashboard } from "../context/VaultDashboardContext";
 import {
@@ -346,6 +347,7 @@ const VaultDashboard = () => {
           </p>
         </div>
         <RiskScorecards scorecard={data.risk.scorecard} />
+        <OracleRiskPanel oracleRisk={data.risk.oracle} />
       </section>
 
       <section>

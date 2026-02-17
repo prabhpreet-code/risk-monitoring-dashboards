@@ -256,6 +256,60 @@ export function buildVaultRiskReportCsv(data: VaultReadModel): string {
   lines.push(
     `executive,active_loans,${escapeCsvCell(formatNumber(data.risk.scorecard.activePositions))}`
   );
+  lines.push(
+    `executive,oracle_coverage,${escapeCsvCell(
+      formatPercent(data.risk.oracle.scorecard.coveredAllocationPct, 2)
+    )}`
+  );
+  lines.push(
+    `executive,oracle_uncovered_allocation,${escapeCsvCell(
+      formatCurrency(data.risk.oracle.scorecard.uncoveredAllocationUsd)
+    )}`
+  );
+  lines.push(
+    `executive,oracle_contract_hhi,${escapeCsvCell(
+      data.risk.oracle.scorecard.oracleContractHhi === null
+        ? "N/A"
+        : data.risk.oracle.scorecard.oracleContractHhi.toFixed(3)
+    )}`
+  );
+  lines.push(
+    `executive,feed_dependency_hhi,${escapeCsvCell(
+      data.risk.oracle.scorecard.feedDependencyHhi === null
+        ? "N/A"
+        : data.risk.oracle.scorecard.feedDependencyHhi.toFixed(3)
+    )}`
+  );
+  lines.push(
+    `executive,warning_markets,${escapeCsvCell(
+      formatNumber(data.risk.oracle.scorecard.warningMarkets)
+    )}`
+  );
+  lines.push(
+    `executive,warning_exposed_allocation,${escapeCsvCell(
+      formatPercent(data.risk.oracle.scorecard.warningAllocationPct, 2)
+    )}`
+  );
+  lines.push(
+    `executive,error_tolerance_avg,${escapeCsvCell(
+      formatPercent(data.risk.oracle.scorecard.liquidationErrorToleranceAvg, 2)
+    )}`
+  );
+  lines.push(
+    `executive,error_tolerance_p10,${escapeCsvCell(
+      formatPercent(data.risk.oracle.scorecard.liquidationErrorToleranceP10, 2)
+    )}`
+  );
+  lines.push(
+    `executive,low_tolerance_borrow,${escapeCsvCell(
+      formatCurrency(data.risk.oracle.scorecard.lowToleranceBorrowUsd)
+    )}`
+  );
+  lines.push(
+    `executive,breached_tolerance_borrow,${escapeCsvCell(
+      formatCurrency(data.risk.oracle.scorecard.breachedToleranceBorrowUsd)
+    )}`
+  );
 
   lines.push("");
   lines.push(
@@ -339,6 +393,29 @@ export function buildVaultRiskReportCsv(data: VaultReadModel): string {
     );
   });
 
+  lines.push("");
+  lines.push(
+    "oracle_risk,market,allocation_pct,has_oracle,oracle_type,feed_count,warning_total,warning_red,warning_yellow,warning_types"
+  );
+  data.risk.oracle.markets.forEach((market) => {
+    lines.push(
+      [
+        "oracle_risk",
+        market.marketLabel,
+        formatPercent(market.allocationPct, 2),
+        market.hasOracle ? "true" : "false",
+        market.oracleType ?? "N/A",
+        formatNumber(market.feedCount),
+        formatNumber(market.warningCount),
+        formatNumber(market.redWarningCount),
+        formatNumber(market.yellowWarningCount),
+        market.warningTypes.length > 0 ? market.warningTypes.join(" | ") : "N/A",
+      ]
+        .map((cell) => escapeCsvCell(cell))
+        .join(",")
+    );
+  });
+
   return `${lines.join("\n")}\n`;
 }
 
@@ -370,7 +447,52 @@ export function buildVaultRiskReportHtml(data: VaultReadModel): string {
     ["Active Borrowers", formatNumber(data.risk.scorecard.activeBorrowers)],
   ];
 
+  const oracleOverviewRows = [
+    [
+      "Oracle Coverage",
+      formatPercent(data.risk.oracle.scorecard.coveredAllocationPct, 2),
+    ],
+    [
+      "Uncovered Allocation",
+      formatCurrency(data.risk.oracle.scorecard.uncoveredAllocationUsd),
+    ],
+    [
+      "Oracle Contract HHI",
+      data.risk.oracle.scorecard.oracleContractHhi === null
+        ? "N/A"
+        : data.risk.oracle.scorecard.oracleContractHhi.toFixed(3),
+    ],
+    [
+      "Feed Dependency HHI",
+      data.risk.oracle.scorecard.feedDependencyHhi === null
+        ? "N/A"
+        : data.risk.oracle.scorecard.feedDependencyHhi.toFixed(3),
+    ],
+    ["Warning Markets", formatNumber(data.risk.oracle.scorecard.warningMarkets)],
+    [
+      "Warning-Exposed Allocation",
+      formatPercent(data.risk.oracle.scorecard.warningAllocationPct, 2),
+    ],
+    [
+      "Error Tolerance (Avg)",
+      formatPercent(data.risk.oracle.scorecard.liquidationErrorToleranceAvg, 2),
+    ],
+    [
+      "Error Tolerance (P10)",
+      formatPercent(data.risk.oracle.scorecard.liquidationErrorToleranceP10, 2),
+    ],
+    [
+      "Low Tolerance Borrow (<=5%)",
+      formatCurrency(data.risk.oracle.scorecard.lowToleranceBorrowUsd),
+    ],
+    [
+      "Breached Tolerance (<=0%)",
+      formatCurrency(data.risk.oracle.scorecard.breachedToleranceBorrowUsd),
+    ],
+  ];
+
   const topAllocations = data.allocations.slice(0, 6);
+  const oracleMarkets = data.risk.oracle.markets.slice(0, 8);
   const recentLiquidations = data.risk.recentLiquidations.slice(0, 8);
   const performancePoints = toChartPoints(data.performanceSeries);
   const apyPoints = toChartPoints(data.netApySeries, (value) => value * 100);
@@ -692,6 +814,58 @@ export function buildVaultRiskReportHtml(data: VaultReadModel): string {
       </div>
 
       <div class="row">
+        <article class="panel">
+          <h2>Oracle Risk Summary</h2>
+          <table>
+            <tbody>
+              ${oracleOverviewRows
+                .map(
+                  ([label, value]) => `
+                <tr>
+                  <td>${escapeHtml(label)}</td>
+                  <td>${escapeHtml(value)}</td>
+                </tr>
+              `
+                )
+                .join("")}
+            </tbody>
+          </table>
+        </article>
+        <article class="panel">
+          <h2>Oracle Monitoring by Market</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Market</th>
+                <th>Oracle</th>
+                <th>Feeds</th>
+                <th>Warnings</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${
+                oracleMarkets.length === 0
+                  ? `<tr><td colspan="4" style="text-align:center;color:#6b7ea3;">No active oracle markets in scope.</td></tr>`
+                  : oracleMarkets
+                      .map(
+                        (market) => `
+                    <tr>
+                      <td>${escapeHtml(market.marketLabel)}</td>
+                      <td>${escapeHtml(market.oracleType ?? (market.hasOracle ? "Configured" : "Missing"))}</td>
+                      <td>${escapeHtml(formatNumber(market.feedCount))}</td>
+                      <td>${escapeHtml(formatNumber(market.warningCount))}</td>
+                    </tr>
+                  `
+                      )
+                      .join("")
+              }
+            </tbody>
+          </table>
+          <p class="subnote">Warning counts are sourced from market-level warning flags in the Morpho API snapshot.</p>
+        </article>
+      </div>
+
+      <div class="row">
         <article class="panel wide">
           <h2>Top Market Allocation</h2>
           <table>
@@ -784,6 +958,7 @@ export function buildVaultRiskReportHtml(data: VaultReadModel): string {
 
       <div class="footer">
         <p><strong>Methodology:</strong> ${escapeHtml(data.risk.methodologyNotes.join(" "))}</p>
+        <p><strong>Oracle Controls:</strong> ${escapeHtml(data.risk.oracle.methodologyNotes.join(" "))}</p>
         <p>Confidential report intended for credit and risk review. Historical and stress results are model-based estimates and should be interpreted alongside governance controls.</p>
       </div>
     </section>

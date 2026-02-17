@@ -3,6 +3,9 @@ import {
   CollateralAtRiskSeries,
   LiquidationIncident,
   LiquidationSummary,
+  OracleRiskAnalysis,
+  OracleRiskMarketRow,
+  OracleRiskScorecard,
   RiskHealthBucket,
   RiskScorecard,
   TimeRangeConfig,
@@ -52,6 +55,45 @@ const VAULT_DASHBOARD_QUERY = `
             }
             collateralAsset {
               symbol
+            }
+            oracle {
+              address
+              type
+              data {
+                __typename
+                ... on MorphoChainlinkOracleData {
+                  baseFeedOne {
+                    address
+                  }
+                  baseFeedTwo {
+                    address
+                  }
+                  quoteFeedOne {
+                    address
+                  }
+                  quoteFeedTwo {
+                    address
+                  }
+                }
+                ... on MorphoChainlinkOracleV2Data {
+                  baseFeedOne {
+                    address
+                  }
+                  baseFeedTwo {
+                    address
+                  }
+                  quoteFeedOne {
+                    address
+                  }
+                  quoteFeedTwo {
+                    address
+                  }
+                }
+              }
+            }
+            warnings {
+              type
+              level
             }
             state {
               utilization
@@ -264,6 +306,29 @@ type GraphQLResponse<T> = {
   errors?: Array<{ message: string }>;
 };
 
+type OracleFeedRef = {
+  address: string;
+};
+
+type MarketOracleData = {
+  __typename: string;
+  baseFeedOne: OracleFeedRef | null;
+  baseFeedTwo: OracleFeedRef | null;
+  quoteFeedOne: OracleFeedRef | null;
+  quoteFeedTwo: OracleFeedRef | null;
+};
+
+type MarketOracle = {
+  address: string;
+  type: string;
+  data: MarketOracleData | null;
+};
+
+type MarketWarning = {
+  type: string;
+  level: string;
+};
+
 type VaultDashboardResponse = {
   vaultByAddress: {
     address: string;
@@ -285,6 +350,8 @@ type VaultDashboardResponse = {
           lltv: string | number;
           loanAsset: { symbol: string };
           collateralAsset: { symbol: string } | null;
+          oracle: MarketOracle | null;
+          warnings: MarketWarning[];
           state: {
             utilization: number;
             liquidityAssetsUsd: number | null;
@@ -603,6 +670,291 @@ function buildWeightedUtilizationSeries(
 
 function getMarketLabel(collateralSymbol: string | null, loanSymbol: string): string {
   return `${collateralSymbol ?? "Idle"}/${loanSymbol}`;
+}
+
+function extractOracleFeedAddresses(oracle: MarketOracle | null): string[] {
+  if (!oracle?.data) {
+    return [];
+  }
+
+  const feeds = [
+    oracle.data.baseFeedOne?.address,
+    oracle.data.baseFeedTwo?.address,
+    oracle.data.quoteFeedOne?.address,
+    oracle.data.quoteFeedTwo?.address,
+  ]
+    .filter((address): address is string => Boolean(address))
+    .map((address) => address.toLowerCase());
+
+  return Array.from(new Set(feeds));
+}
+
+function weightedPercentile(
+  entries: Array<{ value: number; weight: number }>,
+  percentile: number
+): number | null {
+  const sorted = entries
+    .filter(
+      (entry) =>
+        Number.isFinite(entry.value) &&
+        Number.isFinite(entry.weight) &&
+        entry.weight > 0
+    )
+    .sort((a, b) => a.value - b.value);
+
+  if (sorted.length === 0) {
+    return null;
+  }
+
+  const totalWeight = sorted.reduce((sum, entry) => sum + entry.weight, 0);
+  if (totalWeight <= 0) {
+    return null;
+  }
+
+  const target = Math.max(0, Math.min(1, percentile)) * totalWeight;
+  let cumulative = 0;
+  for (const entry of sorted) {
+    cumulative += entry.weight;
+    if (cumulative >= target) {
+      return entry.value;
+    }
+  }
+
+  return sorted[sorted.length - 1].value;
+}
+
+function computeOracleRiskAnalysis({
+  allocations,
+  scaledPositions,
+}: {
+  allocations: VaultAllocationRow[];
+  scaledPositions: RiskPosition[];
+}): OracleRiskAnalysis {
+  const activeCreditAllocations = allocations.filter(
+    (allocation) => allocation.allocationUsd > 0 && allocation.collateralSymbol !== "Idle"
+  );
+
+  const totalActiveAllocationUsd = activeCreditAllocations.reduce(
+    (sum, allocation) => sum + allocation.allocationUsd,
+    0
+  );
+
+  const oracleMarkets: OracleRiskMarketRow[] = activeCreditAllocations
+    .map((allocation) => {
+      const hasOracle = Boolean(
+        allocation.oracleAddress || allocation.oracleType
+      );
+      return {
+        marketKey: allocation.marketKey,
+        marketLabel: getMarketLabel(
+          allocation.collateralSymbol,
+          allocation.loanSymbol
+        ),
+        allocationUsd: allocation.allocationUsd,
+        allocationPct: allocation.allocationPct,
+        hasOracle,
+        oracleType: allocation.oracleType,
+        oracleAddress: allocation.oracleAddress,
+        feedCount: allocation.oracleFeedAddresses.length,
+        feedAddresses: allocation.oracleFeedAddresses,
+        warningCount: allocation.warningCount,
+        redWarningCount: allocation.redWarningCount,
+        yellowWarningCount: allocation.yellowWarningCount,
+        warningTypes: allocation.warningTypes,
+      };
+    })
+    .sort((a, b) => b.allocationUsd - a.allocationUsd);
+
+  const coveredAllocationUsd = oracleMarkets.reduce((sum, market) => {
+    return market.hasOracle ? sum + market.allocationUsd : sum;
+  }, 0);
+
+  const uncoveredAllocationUsd = Math.max(
+    0,
+    totalActiveAllocationUsd - coveredAllocationUsd
+  );
+
+  const warningCount = oracleMarkets.reduce(
+    (sum, market) => sum + market.warningCount,
+    0
+  );
+  const redWarningCount = oracleMarkets.reduce(
+    (sum, market) => sum + market.redWarningCount,
+    0
+  );
+  const yellowWarningCount = oracleMarkets.reduce(
+    (sum, market) => sum + market.yellowWarningCount,
+    0
+  );
+  const warningMarkets = oracleMarkets.filter(
+    (market) => market.warningCount > 0
+  ).length;
+
+  const warningAllocationUsd = oracleMarkets.reduce((sum, market) => {
+    return market.warningCount > 0 ? sum + market.allocationUsd : sum;
+  }, 0);
+
+  const severeWarningAllocationUsd = oracleMarkets.reduce((sum, market) => {
+    return market.redWarningCount > 0 ? sum + market.allocationUsd : sum;
+  }, 0);
+
+  const oracleExposureByAddress = new Map<string, number>();
+  oracleMarkets.forEach((market) => {
+    if (!market.oracleAddress) {
+      return;
+    }
+
+    const key = market.oracleAddress.toLowerCase();
+    oracleExposureByAddress.set(
+      key,
+      (oracleExposureByAddress.get(key) ?? 0) + market.allocationUsd
+    );
+  });
+
+  const oracleExposureValues = Array.from(oracleExposureByAddress.values());
+  const totalOracleExposureUsd = oracleExposureValues.reduce(
+    (sum, value) => sum + value,
+    0
+  );
+  const oracleContractHhi =
+    totalOracleExposureUsd > 0
+      ? oracleExposureValues.reduce((sum, value) => {
+          const share = value / totalOracleExposureUsd;
+          return sum + share * share;
+        }, 0)
+      : null;
+  const topOracleContractConcentration =
+    totalOracleExposureUsd > 0 && oracleExposureValues.length > 0
+      ? Math.max(...oracleExposureValues) / totalOracleExposureUsd
+      : null;
+
+  const feedDependencyExposureByAddress = new Map<string, number>();
+  oracleMarkets.forEach((market) => {
+    if (market.feedAddresses.length === 0) {
+      return;
+    }
+
+    market.feedAddresses.forEach((feedAddress) => {
+      feedDependencyExposureByAddress.set(
+        feedAddress,
+        (feedDependencyExposureByAddress.get(feedAddress) ?? 0) +
+          market.allocationUsd
+      );
+    });
+  });
+
+  const feedDependencyExposureValues = Array.from(
+    feedDependencyExposureByAddress.values()
+  );
+  const totalFeedDependencyExposureUsd = feedDependencyExposureValues.reduce(
+    (sum, value) => sum + value,
+    0
+  );
+
+  const feedDependencyHhi =
+    totalFeedDependencyExposureUsd > 0
+      ? feedDependencyExposureValues.reduce((sum, value) => {
+          const share = value / totalFeedDependencyExposureUsd;
+          return sum + share * share;
+        }, 0)
+      : null;
+  const topFeedDependencyConcentration =
+    totalFeedDependencyExposureUsd > 0 &&
+    feedDependencyExposureValues.length > 0
+      ? Math.max(...feedDependencyExposureValues) / totalFeedDependencyExposureUsd
+      : null;
+
+  const liquidationToleranceEntries: Array<{ value: number; weight: number }> = [];
+  let lowToleranceBorrowUsd = 0;
+  let breachedToleranceBorrowUsd = 0;
+
+  scaledPositions.forEach((position) => {
+    if (
+      position.borrowUsd <= 0 ||
+      position.collateralUsd <= 0 ||
+      position.lltv === null ||
+      position.lltv <= 0
+    ) {
+      return;
+    }
+
+    const positionLtv = position.borrowUsd / position.collateralUsd;
+    const tolerance = 1 - positionLtv / position.lltv;
+    if (!Number.isFinite(tolerance)) {
+      return;
+    }
+
+    liquidationToleranceEntries.push({
+      value: tolerance,
+      weight: position.borrowUsd,
+    });
+
+    if (tolerance <= 0.05) {
+      lowToleranceBorrowUsd += position.borrowUsd;
+    }
+    if (tolerance <= 0) {
+      breachedToleranceBorrowUsd += position.borrowUsd;
+    }
+  });
+
+  const toleranceWeight = liquidationToleranceEntries.reduce(
+    (sum, entry) => sum + entry.weight,
+    0
+  );
+
+  const liquidationErrorToleranceAvg =
+    toleranceWeight > 0
+      ? liquidationToleranceEntries.reduce(
+          (sum, entry) => sum + entry.value * entry.weight,
+          0
+        ) / toleranceWeight
+      : null;
+
+  const liquidationErrorToleranceP10 = weightedPercentile(
+    liquidationToleranceEntries,
+    0.1
+  );
+
+  const scorecard: OracleRiskScorecard = {
+    coveredAllocationPct:
+      totalActiveAllocationUsd > 0
+        ? coveredAllocationUsd / totalActiveAllocationUsd
+        : null,
+    uncoveredAllocationUsd,
+    oracleContractHhi,
+    topOracleContractConcentration,
+    uniqueOracleContracts: oracleExposureByAddress.size,
+    feedDependencyHhi,
+    topFeedDependencyConcentration,
+    uniqueFeeds: feedDependencyExposureByAddress.size,
+    warningCount,
+    redWarningCount,
+    yellowWarningCount,
+    warningMarkets,
+    warningAllocationPct:
+      totalActiveAllocationUsd > 0
+        ? warningAllocationUsd / totalActiveAllocationUsd
+        : null,
+    severeWarningAllocationPct:
+      totalActiveAllocationUsd > 0
+        ? severeWarningAllocationUsd / totalActiveAllocationUsd
+        : null,
+    liquidationErrorToleranceAvg,
+    liquidationErrorToleranceP10,
+    lowToleranceBorrowUsd,
+    breachedToleranceBorrowUsd,
+  };
+
+  return {
+    scorecard,
+    markets: oracleMarkets,
+    methodologyNotes: [
+      "Oracle coverage is measured across active non-idle credit allocations.",
+      "Contract concentration HHI uses oracle contract allocation shares: sum(share^2).",
+      "Feed dependency concentration uses normalized feed-exposure shares across all referenced feeds.",
+      "Liquidation error tolerance is 1 - (position LTV / market LLTV), aggregated by borrow-weighted average and p10.",
+    ],
+  };
 }
 
 function buildHistoricalShareResolver({
@@ -934,6 +1286,10 @@ function computeRiskAnalysis({
   const activePositions = scaledPositions.filter(
     (position) => position.borrowUsd > 0
   ).length;
+  const oracle = computeOracleRiskAnalysis({
+    allocations,
+    scaledPositions,
+  });
 
   const nowTimestamp =
     snapshot.asOfTimestamp > 0
@@ -969,6 +1325,7 @@ function computeRiskAnalysis({
 
   return {
     scorecard,
+    oracle,
     healthBuckets,
     liquidationSummary30d,
     liquidationSummary90d,
@@ -979,6 +1336,7 @@ function computeRiskAnalysis({
       "Borrower exposures use current vault share of each underlying market.",
       "Liquidation exposures use timestamp-aligned vault share estimates from vault allocation history and market supply history.",
       "Stress collateral-at-risk scales market collateral-at-risk by vault share of each market.",
+      "Oracle diagnostics summarize configured oracle coverage, dependency concentration, and liquidation error tolerance.",
       "Utilization chart uses historical vault allocation weights at each timestamp.",
     ],
   };
@@ -1202,6 +1560,23 @@ export async function fetchVaultReadModel({
       const allocationUsd = toFiniteNumber(allocation.supplyAssetsUsd);
       const marketNetApyRaw =
         allocation.market.state.netSupplyApy ?? allocation.market.state.supplyApy;
+      const oracleFeedAddresses = extractOracleFeedAddresses(
+        allocation.market.oracle
+      );
+      const warningCount = allocation.market.warnings.length;
+      const redWarningCount = allocation.market.warnings.filter(
+        (warning) => warning.level === "RED"
+      ).length;
+      const yellowWarningCount = allocation.market.warnings.filter(
+        (warning) => warning.level === "YELLOW"
+      ).length;
+      const warningTypes = Array.from(
+        new Set(
+          allocation.market.warnings
+            .map((warning) => warning.type)
+            .filter((type): type is string => Boolean(type))
+        )
+      );
 
       return {
         marketKey: allocation.market.uniqueKey,
@@ -1210,6 +1585,13 @@ export async function fetchVaultReadModel({
         allocationUsd,
         allocationPct: totalAssetsUsd === 0 ? 0 : allocationUsd / totalAssetsUsd,
         lltv: parseWadToRatio(allocation.market.lltv),
+        oracleType: allocation.market.oracle?.type ?? null,
+        oracleAddress: allocation.market.oracle?.address ?? null,
+        oracleFeedAddresses,
+        warningCount,
+        redWarningCount,
+        yellowWarningCount,
+        warningTypes,
         marketTotalSupplyUsd: toFiniteNumber(
           allocation.market.state.supplyAssetsUsd
         ),
